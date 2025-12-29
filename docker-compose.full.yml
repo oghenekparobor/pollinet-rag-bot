@@ -27,7 +27,7 @@ services:
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - DATABASE_URL=postgresql://postgres:password@postgres:5432/pollinet_bot
+      - DATABASE_URL=${DATABASE_URL}
       - EMBEDDINGS_TABLE=document_embeddings
       - EMBEDDING_MODEL=text-embedding-ada-002
       - GPT_MODEL=gpt-4o-mini

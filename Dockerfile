@@ -1,5 +1,5 @@
 # Multi-stage build for optimal image size
-FROM rust:1.75-slim as builder
+FROM rustlang/rust:nightly-slim AS builder
 
 WORKDIR /app
 
