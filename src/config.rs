@@ -31,6 +31,9 @@ pub struct Config {
     
     /// Number of document chunks to retrieve for context
     pub top_k_chunks: usize,
+    
+    /// Maximum chunks to include in fallback context (limits token cost)
+    pub max_fallback_chunks: usize,
 }
 
 impl Config {
@@ -70,6 +73,11 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(5),
+            
+            max_fallback_chunks: env::var("MAX_FALLBACK_CHUNKS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(30),
         })
     }
     

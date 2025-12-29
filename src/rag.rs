@@ -430,37 +430,72 @@ impl RAGSystem {
         Ok(answer)
     }
 
-    /// Generate a fallback response using ChatGPT (without knowledge base context)
-    /// Used when no relevant information is found in the knowledge base
+    /// Retrieve ALL documents from database (for comprehensive fallback context)
+    async fn retrieve_all_documents(&self) -> Result<Vec<String>> {
+        log::info!("Retrieving all documents for comprehensive context (limit: {})", 
+                   self.config.max_fallback_chunks);
+
+        let query = format!(
+            "SELECT content FROM {} ORDER BY created_at LIMIT $1",
+            self.config.embeddings_table
+        );
+
+        let rows = sqlx::query(&query)
+            .bind(self.config.max_fallback_chunks as i64)
+            .fetch_all(&self.db_pool)
+            .await
+            .context("Failed to retrieve all documents")?;
+
+        let chunks: Vec<String> = rows
+            .into_iter()
+            .map(|row| row.get::<String, _>("content"))
+            .collect();
+
+        log::info!("Retrieved {} total chunks for context", chunks.len());
+        Ok(chunks)
+    }
+
+    /// Generate a fallback response using ChatGPT with full knowledge base context
+    /// Used when no relevant information is found via similarity search
     async fn generate_fallback_response(
         &self,
         query: &str,
         conversation_history: &[ConversationMessage],
     ) -> Result<String> {
-        log::info!("Generating fallback response using ChatGPT with Pollinet context");
+        log::info!("Generating fallback response using ChatGPT with full Pollinet knowledge base");
 
-        // Build system message with Pollinet context
+        // Retrieve all documents for comprehensive context
+        let all_chunks = self.retrieve_all_documents().await?;
+        
+        // Build comprehensive context
+        let full_context = if all_chunks.is_empty() {
+            "No documents in knowledge base yet.".to_string()
+        } else {
+            all_chunks.join("\n\n---\n\n")
+        };
+
+        // Build system message with full Pollinet knowledge base
         let system_message = ConversationMessage {
             role: "system".to_string(),
-            content: "You are a helpful assistant for Pollinet, a decentralized SDK enabling \
-                     offline Solana transactions via Bluetooth Low Energy (BLE) mesh networks. \
-                     \n\n\
-                     KEY CONTEXT ABOUT POLLINET:\n\
-                     - Pollinet distributes Solana transactions over BLE mesh (like pollen grains)\n\
-                     - Enables offline transactions that reach blockchain when any peer has internet\n\
-                     - Uses nonce accounts for extended transaction lifespan\n\
-                     - Built on Solana blockchain\n\
-                     - Native token: POLLEN (1B supply)\n\
-                     - Open source under Apache 2.0 License\n\
-                     - DePIN (Decentralized Physical Infrastructure Network) focus\n\
-                     - SDKs available in Rust, Swift, Kotlin, JavaScript/TypeScript\n\
-                     \n\
-                     When answering questions:\n\
-                     1. Try to relate answers back to Pollinet's mission and technology when relevant\n\
-                     2. If the question is completely unrelated to Pollinet/blockchain/technology, \
-                        provide a brief answer and suggest asking Pollinet-specific questions\n\
-                     3. Stay factual and acknowledge uncertainty when appropriate\n\
-                     4. Keep responses concise and helpful".to_string(),
+            content: format!(
+                "You are a helpful assistant for Pollinet, a decentralized SDK enabling \
+                offline Solana transactions via Bluetooth Low Energy (BLE) mesh networks. \
+                \n\n\
+                COMPLETE POLLINET KNOWLEDGE BASE:\n\
+                {}\n\
+                ---\n\n\
+                When answering questions:\n\
+                1. First try to answer using the knowledge base above\n\
+                2. If the question is about Pollinet, blockchain, Solana, Web3, DePIN, or related crypto topics, \
+                   answer using the knowledge base or your understanding of these topics\n\
+                3. If the question is COMPLETELY UNRELATED (weather, cooking, sports, entertainment, general trivia, etc.), \
+                   respond EXACTLY with: 'I'm sorry, but I only answer questions related to Pollinet, blockchain, \
+                   Solana, and Web3 technologies. Please ask me something about Pollinet!'\n\
+                4. If you're unsure whether a question is related, err on the side of answering if there's \
+                   any connection to blockchain/crypto/technology\n\
+                5. Keep responses concise and accurate",
+                full_context
+            ),
         };
 
         // Build messages array
@@ -527,20 +562,14 @@ impl RAGSystem {
 
         // Step 2: Check if we have relevant context
         if chunks.is_empty() {
-            log::info!("No relevant chunks found, using ChatGPT fallback");
+            log::info!("No relevant chunks found, using ChatGPT fallback with full knowledge base");
             
-            // Use general ChatGPT as fallback
+            // Use ChatGPT with full knowledge base as fallback
             let fallback_response = self
                 .generate_fallback_response(query, conversation_history)
                 .await?;
             
-            // Add disclaimer
-            let response_with_disclaimer = format!(
-                "⚠️ *Note: This information is not from the Pollinet knowledge base. Please verify independently.*\n\n{}",
-                fallback_response
-            );
-            
-            return Ok(response_with_disclaimer);
+            return Ok(fallback_response);
         }
 
         // Step 3: Generate response with context from knowledge base
@@ -550,20 +579,14 @@ impl RAGSystem {
 
         // Check if GPT said it doesn't know
         if response.contains("I don't have that information yet") {
-            log::info!("GPT couldn't answer from context, using ChatGPT fallback");
+            log::info!("GPT couldn't answer from context, using ChatGPT fallback with full knowledge base");
             
-            // Use general ChatGPT as fallback
+            // Use ChatGPT with full knowledge base as fallback
             let fallback_response = self
                 .generate_fallback_response(query, conversation_history)
                 .await?;
             
-            // Add disclaimer
-            let response_with_disclaimer = format!(
-                "⚠️ *Note: This information is not from the Pollinet knowledge base. Please verify independently.*\n\n{}",
-                fallback_response
-            );
-            
-            return Ok(response_with_disclaimer);
+            return Ok(fallback_response);
         }
 
         Ok(response)
