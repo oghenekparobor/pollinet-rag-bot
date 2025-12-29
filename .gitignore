@@ -1,0 +1,4 @@
+/target
+.env
+qdrant_storage/
+docs/

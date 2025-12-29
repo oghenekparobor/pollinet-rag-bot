@@ -1,0 +1,2 @@
+web: cargo run --release
+

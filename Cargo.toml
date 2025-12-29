@@ -1,0 +1,23 @@
+[package]
+name = "pollinet_knowledge_bot"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "pollinet_knowledge_bot"
+path = "src/lib.rs"
+
+[dependencies]
+teloxide = { version = "0.12", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+log = "0.4"
+pretty_env_logger = "0.5"
+dotenv = "0.15"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.11", features = ["json"] }
+anyhow = "1.0"
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid"] }
+pgvector = { version = "0.3", features = ["sqlx"] }
+async-trait = "0.1"
+tiktoken-rs = "0.5"

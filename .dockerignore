@@ -1,0 +1,11 @@
+target/
+.env
+.git/
+.gitignore
+*.md
+.dockerignore
+docker-compose.yml
+qdrant_storage/
+*.log
+.DS_Store
+
