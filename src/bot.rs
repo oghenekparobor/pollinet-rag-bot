@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use teloxide::{prelude::*, types::Me, utils::command::BotCommands};
 use tokio::time::sleep;
+use reqwest;
 
 use crate::config::Config;
 use crate::handlers::{
@@ -38,7 +39,14 @@ pub async fn run_bot_with_rag(config: Config, rag_system: Arc<RAGSystem>) -> Res
     ));
 
     // Create bot instance with custom client for better timeout handling
-    let bot = Bot::new(&config.telegram_token);
+    // Use a custom reqwest client with longer timeouts to handle slow connections
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30)) // 30 second timeout instead of default 10s
+        .connect_timeout(Duration::from_secs(15)) // 15 second connection timeout
+        .build()
+        .context("Failed to create HTTP client")?;
+    
+    let bot = Bot::with_client(&config.telegram_token, client);
 
     // Get bot info with retry logic for network issues
     let me = retry_get_me(&bot).await
@@ -110,21 +118,69 @@ async fn retry_get_me(bot: &Bot) -> Result<Me> {
     let max_retries = 5;
     let mut delay = Duration::from_secs(2);
 
+    log::info!("Attempting to connect to Telegram API...");
+
     for attempt in 1..=max_retries {
         match bot.get_me().await {
-            Ok(me) => return Ok(me),
+            Ok(me) => {
+                log::info!("Successfully connected to Telegram API on attempt {}", attempt);
+                return Ok(me);
+            }
             Err(e) => {
+                let error_str = format!("{}", e);
+                
                 if attempt == max_retries {
-                    anyhow::bail!("Failed to get bot info after {} attempts: {}", max_retries, e);
+                    log::error!(
+                        "Failed to connect to Telegram API after {} attempts.",
+                        max_retries
+                    );
+                    log::error!("Last error: {}", e);
+                    log::error!("\nTroubleshooting tips:");
+                    log::error!("1. Check your internet connection");
+                    log::error!("2. Verify Telegram API is accessible: https://api.telegram.org");
+                    log::error!("3. Check firewall/proxy settings");
+                    log::error!("4. If using VPN, try disabling it");
+                    log::error!("5. Check if your hosting provider blocks outbound connections");
+                    anyhow::bail!(
+                        "Failed to connect to Telegram API after {} attempts: {}",
+                        max_retries,
+                        e
+                    );
                 }
                 
-                log::warn!(
-                    "Failed to connect to Telegram API (attempt {}/{}): {}. Retrying in {:?}...",
-                    attempt,
-                    max_retries,
-                    e,
-                    delay
-                );
+                // Provide more specific guidance based on error type
+                if error_str.contains("TimedOut") || error_str.contains("timeout") {
+                    log::warn!(
+                        "Connection timeout (attempt {}/{}). This usually indicates:\n\
+                        - Slow or unstable network connection\n\
+                        - Firewall blocking outbound connections\n\
+                        - VPN or proxy issues\n\
+                        Retrying in {:?}...",
+                        attempt,
+                        max_retries,
+                        delay
+                    );
+                } else if error_str.contains("Connect") || error_str.contains("connection") {
+                    log::warn!(
+                        "Connection error (attempt {}/{}). This usually indicates:\n\
+                        - Network connectivity issues\n\
+                        - DNS resolution problems\n\
+                        - Telegram API temporarily unavailable\n\
+                        Retrying in {:?}...",
+                        attempt,
+                        max_retries,
+                        delay
+                    );
+                } else {
+                    log::warn!(
+                        "Failed to connect to Telegram API (attempt {}/{}): {}\n\
+                        Retrying in {:?}...",
+                        attempt,
+                        max_retries,
+                        e,
+                        delay
+                    );
+                }
                 
                 sleep(delay).await;
                 delay *= 2; // Exponential backoff
