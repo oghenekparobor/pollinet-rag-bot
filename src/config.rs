@@ -34,6 +34,19 @@ pub struct Config {
     
     /// Maximum chunks to include in fallback context (limits token cost)
     pub max_fallback_chunks: usize,
+    
+    /// Twitter API Bearer Token (optional, for Twitter sync)
+    /// Can be set via TWITTER_API_KEY or TWITTER_BEARER_TOKEN
+    pub twitter_api_key: Option<String>,
+    
+    /// Twitter API Secret (optional, for OAuth 1.0a)
+    pub twitter_api_secret: Option<String>,
+    
+    /// Secret key for authenticating sync API requests
+    pub sync_api_secret: Option<String>,
+    
+    /// HTTP server port for sync endpoints
+    pub http_port: u16,
 }
 
 impl Config {
@@ -78,6 +91,20 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(30),
+            
+            // Support both TWITTER_API_KEY and TWITTER_BEARER_TOKEN
+            twitter_api_key: env::var("TWITTER_BEARER_TOKEN")
+                .or_else(|_| env::var("TWITTER_API_KEY"))
+                .ok(),
+            
+            twitter_api_secret: env::var("TWITTER_API_SECRET").ok(),
+            
+            sync_api_secret: env::var("SYNC_API_SECRET").ok(),
+            
+            http_port: env::var("HTTP_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3000),
         })
     }
     

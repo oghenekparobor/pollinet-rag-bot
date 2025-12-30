@@ -21,3 +21,8 @@ sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid"
 pgvector = { version = "0.3", features = ["sqlx"] }
 async-trait = "0.1"
 tiktoken-rs = "0.5"
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors"] }
+chrono = { version = "0.4", features = ["serde"] }
+lazy_static = "1.5"

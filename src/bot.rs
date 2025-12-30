@@ -26,15 +26,9 @@ pub enum Command {
     Clear,
 }
 
-/// Initialize and run the Telegram bot
-pub async fn run_bot(config: Config) -> Result<()> {
+/// Initialize and run the Telegram bot with a pre-initialized RAG system
+pub async fn run_bot_with_rag(config: Config, rag_system: Arc<RAGSystem>) -> Result<()> {
     log::info!("Initializing bot...");
-
-    // Initialize the RAG system
-    let rag_system = Arc::new(RAGSystem::new(config.clone()).await?);
-    
-    // Initialize the Qdrant collection
-    rag_system.initialize_collection().await?;
 
     // Initialize conversation manager
     let conversation_manager = Arc::new(ConversationManager::new(
@@ -105,5 +99,19 @@ pub async fn run_bot(config: Config) -> Result<()> {
     dispatcher.dispatch().await;
 
     Ok(())
+}
+
+/// Initialize and run the Telegram bot (creates its own RAG system)
+pub async fn run_bot(config: Config) -> Result<()> {
+    log::info!("Initializing bot...");
+
+    // Initialize the RAG system
+    let rag_system = Arc::new(RAGSystem::new(config.clone()).await?);
+    
+    // Initialize the Qdrant collection
+    rag_system.initialize_collection().await?;
+
+    // Run with the RAG system
+    run_bot_with_rag(config, rag_system).await
 }
 
