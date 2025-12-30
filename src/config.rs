@@ -90,7 +90,7 @@ impl Config {
         
         // Test Postgres connection
         let mut pool_options = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(5);
+            .max_connections(20);
         
         // Disable prepared statements for connection poolers
         if use_pooler {

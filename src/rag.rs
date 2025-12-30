@@ -79,7 +79,7 @@ impl RAGSystem {
         let use_pooler = config.database_url.contains(":6543") || config.database_url.contains("pgbouncer=true");
         
         let mut pool_options = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(10);
+            .max_connections(50);
         
         // Disable prepared statements for connection poolers
         if use_pooler {
@@ -375,6 +375,12 @@ impl RAGSystem {
                 4. Be concise and accurate.\n\
                 5. You can use information from previous conversation to provide better context, \
                 but only if it's based on the provided knowledge.\n\
+                6. Format your responses using HTML:\n\
+                   - Use <b>bold</b> for emphasis and section headers\n\
+                   - Use bullet points (• or emoji bullets like 🔗, ✅) for lists\n\
+                   - Use <code>code</code> for technical terms\n\
+                   - Use <i>italic</i> for subtle emphasis\n\
+                   - Structure responses clearly with headers and spacing\n\
                 \n\
                 Context from Pollinet documents:\n\
                 {}\n\
@@ -493,7 +499,13 @@ impl RAGSystem {
                    Solana, and Web3 technologies. Please ask me something about Pollinet!'\n\
                 4. If you're unsure whether a question is related, err on the side of answering if there's \
                    any connection to blockchain/crypto/technology\n\
-                5. Keep responses concise and accurate",
+                5. Keep responses concise and accurate\n\
+                6. ALWAYS format responses using HTML:\n\
+                   - Use <b>bold</b> for emphasis and section headers\n\
+                   - Use bullet points with emoji bullets (🔗, •, ✅, etc.) for lists\n\
+                   - Use <code>code</code> for technical terms and code snippets\n\
+                   - Use <i>italic</i> for subtle emphasis\n\
+                   - Structure responses with clear sections using <b>headers</b>",
                 full_context
             ),
         };

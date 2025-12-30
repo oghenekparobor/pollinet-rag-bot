@@ -9,8 +9,8 @@ use teloxide::{prelude::*, types::Me, utils::command::BotCommands};
 
 use crate::config::Config;
 use crate::handlers::{
-    handle_clear_command, handle_help_command, handle_message, handle_start_command,
-    ConversationManager,
+    handle_clear_command, handle_edited_message, handle_help_command, handle_message, 
+    handle_start_command, ConversationManager,
 };
 use crate::rag::RAGSystem;
 
@@ -71,6 +71,18 @@ pub async fn run_bot(config: Config) -> Result<()> {
                     |bot: Bot, msg: Message, me: Me, rag_system: Arc<RAGSystem>, conversation_manager: Arc<ConversationManager>| async move {
                         if let Err(e) = handle_message(bot, msg, me, rag_system, conversation_manager).await {
                             log::error!("Error handling message: {:?}", e);
+                        }
+                        Ok(())
+                    },
+                ),
+        )
+        // Handle edited messages
+        .branch(
+            Update::filter_edited_message()
+                .endpoint(
+                    |bot: Bot, msg: Message, me: Me, rag_system: Arc<RAGSystem>, conversation_manager: Arc<ConversationManager>| async move {
+                        if let Err(e) = handle_edited_message(bot, msg, me, rag_system, conversation_manager).await {
+                            log::error!("Error handling edited message: {:?}", e);
                         }
                         Ok(())
                     },

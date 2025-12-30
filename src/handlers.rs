@@ -9,7 +9,7 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
-use teloxide::{prelude::*, types::Me};
+use teloxide::{prelude::*, types::{Me, ParseMode}};
 use tokio::sync::RwLock;
 
 use crate::rag::{ConversationMessage, RAGSystem};
@@ -85,10 +85,21 @@ impl ConversationManager {
 /// 1. It is mentioned/tagged in the message
 /// 2. Message contains the keyword "Pollinet" (case-insensitive)
 /// 3. It's a private chat (not a group)
-pub fn should_respond(bot_username: &str, message: &Message) -> bool {
+/// 4. Message is a reply to the bot's message
+pub fn should_respond(bot_username: &str, message: &Message, bot_id: teloxide::types::UserId) -> bool {
     // Always respond in private chats
     if message.chat.is_private() {
         return true;
+    }
+
+    // Check if this is a reply to the bot's message
+    if let Some(reply_to) = message.reply_to_message() {
+        if let Some(from) = reply_to.from() {
+            if from.id == bot_id {
+                log::debug!("Responding to reply to bot message");
+                return true;
+            }
+        }
     }
 
     // In group chats, check for mentions or keywords
@@ -139,6 +150,22 @@ pub fn extract_query(bot_username: &str, text: &str) -> String {
     query.trim().to_string()
 }
 
+/// Handle edited messages - delegates to the main message handler
+/// 
+/// This allows users to edit their questions and get updated responses
+pub async fn handle_edited_message(
+    bot: Bot,
+    msg: Message,
+    me: Me,
+    rag_system: Arc<RAGSystem>,
+    conversation_manager: Arc<ConversationManager>,
+) -> Result<()> {
+    log::debug!("Handling edited message from chat {}", msg.chat.id);
+    // Process edited messages the same way as new messages
+    // The bot will respond with a fresh answer to the edited question
+    handle_message(bot, msg, me, rag_system, conversation_manager).await
+}
+
 /// Main message handler
 /// 
 /// This function:
@@ -170,8 +197,8 @@ pub async fn handle_message(
     );
 
     // Check if we should respond to this message
-    if !should_respond(&me.username(), &msg) {
-        log::debug!("Skipping message (no mention/keyword)");
+    if !should_respond(&me.username(), &msg, me.id) {
+        log::debug!("Skipping message (no mention/keyword/reply)");
         return Ok(());
     }
 
@@ -212,24 +239,28 @@ pub async fn handle_message(
         .add_assistant_message(chat_id, response.clone())
         .await;
 
-    // Send the response
-    bot.send_message(msg.chat.id, response).await?;
+    // Send the response with HTML formatting
+    bot.send_message(msg.chat.id, response)
+        .parse_mode(ParseMode::Html)
+        .await?;
 
     Ok(())
 }
 
 /// Handle the /start command
 pub async fn handle_start_command(bot: Bot, msg: Message) -> Result<()> {
-    let welcome_message = "👋 Hello! I'm the Pollinet Knowledge Bot.\n\n\
+    let welcome_message = "👋 <b>Hello! I'm the Pollinet Knowledge Bot.</b>\n\n\
         I can answer questions about Pollinet based on the official documentation.\n\n\
-        How to use me:\n\
+        <b>How to use me:</b>\n\
         • In private chats: Just send me your question\n\
-        • In group chats: Mention me (@{}) or include 'Pollinet' in your message\n\n\
+        • In group chats: Mention me or include 'Pollinet' in your message\n\
+        • You can also reply to my messages\n\n\
         I only provide information from the Pollinet knowledge base. \
         If I don't have the answer, I'll let you know!\n\n\
         Try asking me something about Pollinet!";
 
     bot.send_message(msg.chat.id, welcome_message)
+        .parse_mode(ParseMode::Html)
         .await?;
 
     Ok(())
@@ -237,22 +268,24 @@ pub async fn handle_start_command(bot: Bot, msg: Message) -> Result<()> {
 
 /// Handle the /help command
 pub async fn handle_help_command(bot: Bot, msg: Message) -> Result<()> {
-    let help_message = "ℹ️ Pollinet Knowledge Bot Help\n\n\
-        Commands:\n\
+    let help_message = "ℹ️ <b>Pollinet Knowledge Bot Help</b>\n\n\
+        <b>Commands:</b>\n\
         /start - Welcome message and introduction\n\
         /help - Show this help message\n\
         /clear - Clear conversation history\n\n\
-        How I work:\n\
+        <b>How I work:</b>\n\
         • I use Retrieval-Augmented Generation (RAG) to answer questions\n\
         • I search through Pollinet documents to find relevant information\n\
         • I remember our conversation to provide contextual answers\n\
         • I never make up information - if I don't know, I'll tell you\n\n\
-        Tips:\n\
+        <b>Tips:</b>\n\
         • Ask specific questions for better answers\n\
         • You can ask follow-up questions and I'll remember the context\n\
-        • In groups, mention me or say 'Pollinet' to get my attention";
+        • In groups, mention me, say 'Pollinet', or reply to my messages\n\
+        • You can edit your messages and I'll respond to the edited version";
 
     bot.send_message(msg.chat.id, help_message)
+        .parse_mode(ParseMode::Html)
         .await?;
 
     Ok(())
@@ -269,8 +302,9 @@ pub async fn handle_clear_command(
 
     bot.send_message(
         msg.chat.id,
-        "✅ Conversation history cleared! Starting fresh.",
+        "✅ <b>Conversation history cleared!</b> Starting fresh.",
     )
+    .parse_mode(ParseMode::Html)
     .await?;
 
     Ok(())
