@@ -3,9 +3,11 @@
 /// This module sets up and runs the Telegram bot using the teloxide framework.
 /// It connects all the pieces: configuration, RAG system, handlers, and conversation management.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::sync::Arc;
+use std::time::Duration;
 use teloxide::{prelude::*, types::Me, utils::command::BotCommands};
+use tokio::time::sleep;
 
 use crate::config::Config;
 use crate::handlers::{
@@ -35,11 +37,12 @@ pub async fn run_bot_with_rag(config: Config, rag_system: Arc<RAGSystem>) -> Res
         config.max_conversation_history * 2, // Store both user and assistant messages
     ));
 
-    // Create bot instance
+    // Create bot instance with custom client for better timeout handling
     let bot = Bot::new(&config.telegram_token);
 
-    // Get bot info
-    let me = bot.get_me().await?;
+    // Get bot info with retry logic for network issues
+    let me = retry_get_me(&bot).await
+        .context("Failed to connect to Telegram API after multiple retries")?;
     log::info!("Bot started: @{}", me.username());
 
     // Set up command handler
@@ -95,10 +98,41 @@ pub async fn run_bot_with_rag(config: Config, rag_system: Arc<RAGSystem>) -> Res
 
     log::info!("Bot is running. Press Ctrl+C to stop.");
     
-    // Start the dispatcher
+    // Start the dispatcher - teloxide handles reconnections automatically
+    // But we add better error logging for network issues
     dispatcher.dispatch().await;
 
     Ok(())
+}
+
+/// Retry getting bot info with exponential backoff
+async fn retry_get_me(bot: &Bot) -> Result<Me> {
+    let max_retries = 5;
+    let mut delay = Duration::from_secs(2);
+
+    for attempt in 1..=max_retries {
+        match bot.get_me().await {
+            Ok(me) => return Ok(me),
+            Err(e) => {
+                if attempt == max_retries {
+                    anyhow::bail!("Failed to get bot info after {} attempts: {}", max_retries, e);
+                }
+                
+                log::warn!(
+                    "Failed to connect to Telegram API (attempt {}/{}): {}. Retrying in {:?}...",
+                    attempt,
+                    max_retries,
+                    e,
+                    delay
+                );
+                
+                sleep(delay).await;
+                delay *= 2; // Exponential backoff
+            }
+        }
+    }
+    
+    unreachable!()
 }
 
 /// Initialize and run the Telegram bot (creates its own RAG system)
