@@ -107,9 +107,13 @@ impl Config {
     
     /// Auto-detect webhook URL from cloud platform environment variables
     fn detect_webhook_url() -> Option<String> {
-        // Check if explicitly set
+        // Check if explicitly set (highest priority)
         if let Ok(url) = env::var("WEBHOOK_URL") {
             if !url.is_empty() {
+                // Ensure URL has https:// prefix if it's just a domain
+                if !url.starts_with("http://") && !url.starts_with("https://") {
+                    return Some(format!("https://{}", url));
+                }
                 return Some(url);
             }
         }
@@ -117,6 +121,18 @@ impl Config {
         // Railway provides RAILWAY_PUBLIC_DOMAIN
         if let Ok(domain) = env::var("RAILWAY_PUBLIC_DOMAIN") {
             return Some(format!("https://{}", domain));
+        }
+        
+        // Railway also provides RAILWAY_STATIC_URL for public networking
+        if let Ok(url) = env::var("RAILWAY_STATIC_URL") {
+            if !url.is_empty() {
+                // Ensure it has https://
+                if url.starts_with("https://") {
+                    return Some(url);
+                } else {
+                    return Some(format!("https://{}", url));
+                }
+            }
         }
         
         // Fly.io provides FLY_APP_NAME

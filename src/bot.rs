@@ -100,9 +100,46 @@ pub async fn run_bot_with_rag(config: Config, rag_system: Arc<RAGSystem>) -> Res
     log::info!("Creating bot instance with custom client...");
     let bot = Bot::with_client(&config.telegram_token, client);
 
+    // Check if we're using webhooks - if so, we can skip get_me() initially
+    // Telegram will verify the bot when we set the webhook
+    let is_webhook_mode = config.webhook_url.is_some();
+    
     // Get bot info with retry logic for network issues
-    let me = retry_get_me(&bot).await
-        .context("Failed to connect to Telegram API after multiple retries")?;
+    // For webhook mode, skip this - we'll get it when setting the webhook (which also needs outbound connection)
+    let me = if is_webhook_mode {
+        log::info!("Webhook mode detected - skipping initial bot info retrieval");
+        log::info!("Bot info will be retrieved when setting webhook (requires same outbound connection)");
+        // Try a quick single attempt, but don't fail if it doesn't work
+        match bot.get_me().await {
+            Ok(me) => {
+                log::info!("Bot info retrieved: @{}", me.username());
+                me
+            }
+            Err(e) => {
+                log::warn!("Could not get bot info initially (this is expected if Railway blocks outbound connections)");
+                log::warn!("Error: {}. Will attempt during webhook setup.", e);
+                // We'll get it in run_webhook_server - for now return an error with helpful message
+                anyhow::bail!(
+                    "Cannot reach Telegram API. For Railway webhook mode:\n\
+                    \n\
+                    Railway may be blocking outbound connections. Try:\n\
+                    1. Check Railway service settings - ensure outbound connections are allowed\n\
+                    2. Verify Railway network policies allow connections to api.telegram.org\n\
+                    3. Check if Railway requires a specific network configuration\n\
+                    4. Try restarting the Railway service\n\
+                    \n\
+                    Note: Setting webhook also requires outbound connection, so if this fails,\n\
+                    the webhook setup will also fail with the same network issue.\n\
+                    \n\
+                    Error: {}", e
+                );
+            }
+        }
+    } else {
+        // For polling mode, we must get bot info
+        retry_get_me(&bot).await
+            .context("Failed to connect to Telegram API after multiple retries")?
+    };
     log::info!("Bot started: @{}", me.username());
 
     // Set up command handler
@@ -294,12 +331,38 @@ async fn run_webhook_server(
     webhook_url: &str,
     rag_system: Arc<RAGSystem>,
     conversation_manager: Arc<ConversationManager>,
-    me: Me,
+    _me: Me, // May be invalid if initial get_me() failed - we'll get fresh one here
 ) -> Result<()> {
     let webhook_path = format!("{}/webhook", webhook_url);
     let addr = format!("0.0.0.0:{}", config.webhook_port);
     
     log::info!("Setting webhook URL: {}", webhook_path);
+    
+    // Verify bot info now (setting webhook also needs outbound connection)
+    // Always get fresh bot info here to verify connectivity
+    log::info!("Verifying bot token and network connectivity...");
+    let verified_me = match bot.get_me().await {
+        Ok(new_me) => {
+            log::info!("✓ Bot verified: @{}", new_me.username());
+            new_me
+        }
+        Err(e) => {
+            log::error!("✗ Failed to verify bot token - cannot reach Telegram API");
+            log::error!("This indicates Railway is blocking outbound connections to api.telegram.org");
+            anyhow::bail!(
+                "Cannot set webhook - Railway is blocking outbound connections.\n\
+                \n\
+                Solutions:\n\
+                1. Check Railway service network settings - ensure outbound connections are enabled\n\
+                2. Verify Railway allows connections to api.telegram.org (port 443)\n\
+                3. Check Railway firewall/security group settings\n\
+                4. Try using Railway's public networking feature if available\n\
+                5. Consider using a different hosting provider if Railway blocks outbound connections\n\
+                \n\
+                Error: {}", e
+            );
+        }
+    };
     
     // Set webhook with Telegram
     let mut set_webhook = bot.set_webhook(webhook_path.parse()?);
@@ -322,7 +385,7 @@ async fn run_webhook_server(
     let bot_clone = bot.clone();
     let rag_clone = rag_system.clone();
     let conv_clone = conversation_manager.clone();
-    let me_clone = me.clone();
+    let me_clone = verified_me.clone();
     tokio::spawn(async move {
         while let Some(update) = rx.recv().await {
             log::debug!("Processing update from webhook: {:?}", update.id);
