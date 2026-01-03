@@ -9,6 +9,14 @@ use std::time::Duration;
 use teloxide::{prelude::*, types::Me, utils::command::BotCommands};
 use tokio::time::sleep;
 use reqwest;
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::Json,
+    routing::{get, post},
+    Router,
+};
+use serde_json::{json, Value};
 
 use crate::config::Config;
 use crate::handlers::{
@@ -138,21 +146,32 @@ pub async fn run_bot_with_rag(config: Config, rag_system: Arc<RAGSystem>) -> Res
                 ),
         );
 
-    // Create dispatcher
-    let mut dispatcher = Dispatcher::builder(bot, handler)
+    // Build dispatcher (used for both modes)
+    let mut dispatcher = Dispatcher::builder(bot.clone(), handler)
         .dependencies(dptree::deps![
-            rag_system,
-            conversation_manager,
+            rag_system.clone(),
+            conversation_manager.clone(),
             me.clone()
         ])
         .enable_ctrlc_handler()
         .build();
 
-    log::info!("Bot is running. Press Ctrl+C to stop.");
-    
-    // Start the dispatcher - teloxide handles reconnections automatically
-    // But we add better error logging for network issues
-    dispatcher.dispatch().await;
+    // Check if we should use webhooks or polling
+    if let Some(webhook_url) = &config.webhook_url {
+        log::info!("Using webhook mode");
+        run_webhook_server(
+            bot, 
+            config.clone(), 
+            webhook_url,
+            rag_system, 
+            conversation_manager, 
+            me
+        ).await?;
+    } else {
+        log::info!("Using polling mode (no webhook URL configured)");
+        log::info!("Bot is running. Press Ctrl+C to stop.");
+        dispatcher.dispatch().await;
+    }
 
     Ok(())
 }
@@ -268,6 +287,192 @@ async fn retry_get_me(bot: &Bot) -> Result<Me> {
     unreachable!()
 }
 
+/// Run bot with webhook server
+async fn run_webhook_server(
+    bot: Bot,
+    config: Config,
+    webhook_url: &str,
+    rag_system: Arc<RAGSystem>,
+    conversation_manager: Arc<ConversationManager>,
+    me: Me,
+) -> Result<()> {
+    let webhook_path = format!("{}/webhook", webhook_url);
+    let addr = format!("0.0.0.0:{}", config.webhook_port);
+    
+    log::info!("Setting webhook URL: {}", webhook_path);
+    
+    // Set webhook with Telegram
+    let mut set_webhook = bot.set_webhook(webhook_path.parse()?);
+    
+    // Add secret token if configured
+    if let Some(secret) = &config.webhook_secret {
+        set_webhook = set_webhook.secret_token(secret.clone());
+    }
+    
+    set_webhook
+        .await
+        .context("Failed to set webhook with Telegram")?;
+    
+    log::info!("Webhook set successfully");
+    
+    // Create a channel to send updates from webhook handler to processing task
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Update>();
+    
+    // Spawn task to process updates - manually route to handlers
+    let bot_clone = bot.clone();
+    let rag_clone = rag_system.clone();
+    let conv_clone = conversation_manager.clone();
+    let me_clone = me.clone();
+    tokio::spawn(async move {
+        while let Some(update) = rx.recv().await {
+            log::debug!("Processing update from webhook: {:?}", update.id);
+            if let Err(e) = process_webhook_update(
+                bot_clone.clone(),
+                update,
+                rag_clone.clone(),
+                conv_clone.clone(),
+                me_clone.clone(),
+            ).await {
+                log::error!("Error processing webhook update: {:?}", e);
+            }
+        }
+    });
+    
+    // Create shared state for the HTTP server
+    let state = AppState {
+        update_tx: tx,
+    };
+    
+    // Build the router
+    let app = Router::new()
+        .route("/webhook", post(webhook_handler))
+        .route("/health", get(health_check))
+        .with_state(state);
+    
+    log::info!("Starting webhook server on {}", addr);
+    log::info!("Health check available at: http://{}/health", addr);
+    log::info!("Webhook endpoint: http://{}/webhook", addr);
+    
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .context(format!("Failed to bind to {}", addr))?;
+    
+    // Start the HTTP server
+    axum::serve(listener, app)
+        .await
+        .context("Webhook server error")?;
+    
+    Ok(())
+}
+
+/// Application state shared across HTTP handlers
+#[derive(Clone)]
+struct AppState {
+    update_tx: tokio::sync::mpsc::UnboundedSender<Update>,
+}
+
+/// Handle incoming webhook updates from Telegram
+async fn webhook_handler(
+    State(state): State<AppState>,
+    body: axum::body::Body,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    log::debug!("Received webhook update");
+    
+    // Read the body
+    let bytes = match axum::body::to_bytes(body, usize::MAX).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            log::error!("Failed to read webhook body: {}", e);
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "Failed to read request body"})),
+            ));
+        }
+    };
+    
+    // Parse the update
+    let update: Update = match serde_json::from_slice(&bytes) {
+        Ok(update) => update,
+        Err(e) => {
+            log::error!("Failed to parse webhook update: {}", e);
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "Invalid update format"})),
+            ));
+        }
+    };
+    
+    // Send update to processing channel
+    if let Err(e) = state.update_tx.send(update) {
+        log::error!("Failed to send update to processing channel: {}", e);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "Failed to queue update"})),
+        ));
+    }
+    
+    Ok(StatusCode::OK)
+}
+
+/// Process webhook update by manually routing to appropriate handlers
+async fn process_webhook_update(
+    bot: Bot,
+    update: Update,
+    rag_system: Arc<RAGSystem>,
+    conversation_manager: Arc<ConversationManager>,
+    me: Me,
+) -> Result<()> {
+    // Handle different update types using pattern matching
+    match update {
+        Update { kind: teloxide::types::UpdateKind::Message(msg), .. } => {
+            // Check if it's a command
+            if let Some(cmd) = msg.text().and_then(|t| {
+                if t.starts_with('/') {
+                    t.split_whitespace().next().map(|s| s.trim_start_matches('/'))
+                } else {
+                    None
+                }
+            }) {
+                match cmd.to_lowercase().as_str() {
+                    "start" => handle_start_command(bot, msg).await?,
+                    "help" => handle_help_command(bot, msg).await?,
+                    "clear" => handle_clear_command(bot, msg, conversation_manager).await?,
+                    _ => {
+                        // Try to handle as regular message
+                        if let Err(e) = handle_message(bot, msg, me, rag_system, conversation_manager).await {
+                            log::error!("Error handling message: {:?}", e);
+                        }
+                    }
+                }
+            } else {
+                // Regular message
+                if let Err(e) = handle_message(bot, msg, me, rag_system, conversation_manager).await {
+                    log::error!("Error handling message: {:?}", e);
+                }
+            }
+        }
+        Update { kind: teloxide::types::UpdateKind::EditedMessage(msg), .. } => {
+            // Handle edited messages
+            if let Err(e) = handle_edited_message(bot, msg, me, rag_system, conversation_manager).await {
+                log::error!("Error handling edited message: {:?}", e);
+            }
+        }
+        _ => {
+            log::debug!("Ignoring update type: {:?}", update.id);
+        }
+    }
+    
+    Ok(())
+}
+
+/// Health check endpoint
+async fn health_check() -> Json<Value> {
+    Json(json!({
+        "status": "ok",
+        "service": "pollinet_knowledge_bot"
+    }))
+}
+
 /// Initialize and run the Telegram bot (creates its own RAG system)
 pub async fn run_bot(config: Config) -> Result<()> {
     log::info!("Initializing bot...");
@@ -275,7 +480,7 @@ pub async fn run_bot(config: Config) -> Result<()> {
     // Initialize the RAG system
     let rag_system = Arc::new(RAGSystem::new(config.clone()).await?);
     
-    // Initialize the Qdrant collection
+    // Initialize the database collection
     rag_system.initialize_collection().await?;
 
     // Run with the RAG system

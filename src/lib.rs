@@ -7,8 +7,5 @@
 pub mod bot;
 pub mod config;
 pub mod handlers;
-pub mod http_server;
 pub mod rag;
-pub mod scheduler;
-pub mod twitter_sync;
 

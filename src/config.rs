@@ -35,18 +35,15 @@ pub struct Config {
     /// Maximum chunks to include in fallback context (limits token cost)
     pub max_fallback_chunks: usize,
     
-    /// Twitter API Bearer Token (optional, for Twitter sync)
-    /// Can be set via TWITTER_API_KEY or TWITTER_BEARER_TOKEN
-    pub twitter_api_key: Option<String>,
+    /// Webhook URL for receiving updates (if using webhooks)
+    /// If not set, will auto-detect from Railway/Fly.io environment variables
+    pub webhook_url: Option<String>,
     
-    /// Twitter API Secret (optional, for OAuth 1.0a)
-    pub twitter_api_secret: Option<String>,
+    /// Port for webhook HTTP server
+    pub webhook_port: u16,
     
-    /// Secret key for authenticating sync API requests
-    pub sync_api_secret: Option<String>,
-    
-    /// HTTP server port for sync endpoints
-    pub http_port: u16,
+    /// Webhook secret token for security (optional)
+    pub webhook_secret: Option<String>,
 }
 
 impl Config {
@@ -92,20 +89,44 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(30),
             
-            // Support both TWITTER_API_KEY and TWITTER_BEARER_TOKEN
-            twitter_api_key: env::var("TWITTER_BEARER_TOKEN")
-                .or_else(|_| env::var("TWITTER_API_KEY"))
-                .ok(),
-            
-            twitter_api_secret: env::var("TWITTER_API_SECRET").ok(),
-            
-            sync_api_secret: env::var("SYNC_API_SECRET").ok(),
-            
-            http_port: env::var("HTTP_PORT")
+            // Webhook configuration
+            webhook_url: Self::detect_webhook_url(),
+            webhook_port: env::var("WEBHOOK_PORT")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(3000),
+                .unwrap_or_else(|| {
+                    // Default to PORT env var (Railway/Fly.io) or 8080
+                    env::var("PORT")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(8080)
+                }),
+            webhook_secret: env::var("WEBHOOK_SECRET").ok(),
         })
+    }
+    
+    /// Auto-detect webhook URL from cloud platform environment variables
+    fn detect_webhook_url() -> Option<String> {
+        // Check if explicitly set
+        if let Ok(url) = env::var("WEBHOOK_URL") {
+            if !url.is_empty() {
+                return Some(url);
+            }
+        }
+        
+        // Railway provides RAILWAY_PUBLIC_DOMAIN
+        if let Ok(domain) = env::var("RAILWAY_PUBLIC_DOMAIN") {
+            return Some(format!("https://{}", domain));
+        }
+        
+        // Fly.io provides FLY_APP_NAME
+        if let Ok(app_name) = env::var("FLY_APP_NAME") {
+            return Some(format!("https://{}.fly.dev", app_name));
+        }
+        
+        // Heroku provides DYNO but no direct URL, would need to set WEBHOOK_URL
+        // For local development, return None (will use polling)
+        None
     }
     
     /// Validate that all required services are accessible
