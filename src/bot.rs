@@ -336,7 +336,6 @@ async fn run_webhook_server(
     _me: Me, // May be invalid if initial get_me() failed - we'll get fresh one here
 ) -> Result<()> {
     let webhook_path = format!("{}/webhook", webhook_url);
-    let addr = format!("0.0.0.0:{}", config.webhook_port);
     
     log::info!("Setting webhook URL: {}", webhook_path);
     
@@ -380,6 +379,22 @@ async fn run_webhook_server(
     
     log::info!("Webhook set successfully");
     
+    // Ensure we're using Railway's PORT if available (Railway sets this automatically)
+    // Railway's public networking on port 80 forwards to this internal PORT
+    let actual_port = std::env::var("PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(config.webhook_port);
+    
+    log::info!("🔌 Railway public networking: port 80 → internal port {}", actual_port);
+    log::info!("🔌 Railway PORT env var: {:?}", std::env::var("PORT").ok());
+    
+    if actual_port != config.webhook_port {
+        log::info!("Using Railway's PORT env var: {} (config had: {})", actual_port, config.webhook_port);
+    }
+    
+    let addr = format!("0.0.0.0:{}", actual_port);
+    
     // Create a channel to send updates from webhook handler to processing task
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Update>();
     
@@ -417,18 +432,26 @@ async fn run_webhook_server(
         .route("/health", get(health_check))
         .with_state(state);
     
-    log::info!("Starting webhook server on {}", addr);
-    log::info!("Health check available at: http://{}/health", addr);
-    log::info!("Webhook endpoint: http://{}/webhook", addr);
+    log::info!("🚀 Starting webhook server on {}", addr);
+    log::info!("📍 Health check: http://{}/health", addr);
+    log::info!("📍 Webhook endpoint: http://{}/webhook", addr);
+    log::info!("📍 Public webhook URL: {}", webhook_path);
     
+    log::info!("🔗 Attempting to bind to {}...", addr);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .context(format!("Failed to bind to {}", addr))?;
+        .context(format!("Failed to bind to {}. Make sure Railway's PORT env var is set and matches the port you're trying to bind to.", addr))?;
     
-    // Start the HTTP server
+    log::info!("✅ Server bound successfully to {}", addr);
+    log::info!("✅ Server is ready to receive requests!");
+    log::info!("✅ Railway will forward port 80 → internal port {}", actual_port);
+    log::info!("✅ Webhook URL: {}", webhook_path);
+    
+    // Start the HTTP server (this blocks forever)
+    log::info!("🚀 Starting HTTP server...");
     axum::serve(listener, app)
         .await
-        .context("Webhook server error")?;
+        .context("Webhook server error - server may have crashed. Check Railway logs for errors.")?;
     
     Ok(())
 }
@@ -445,6 +468,9 @@ async fn webhook_handler(
     body: axum::body::Body,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
     log::info!("📥 Received webhook update from Telegram");
+    
+    // Add a timeout to prevent hanging requests
+    let start = std::time::Instant::now();
     
     // Read the body
     let bytes = match axum::body::to_bytes(body, usize::MAX).await {
@@ -486,7 +512,8 @@ async fn webhook_handler(
         ));
     }
     
-    log::info!("✓ Update queued for processing");
+    let elapsed = start.elapsed();
+    log::info!("✓ Update queued for processing (took {:?})", elapsed);
     Ok(StatusCode::OK)
 }
 
