@@ -389,8 +389,9 @@ async fn run_webhook_server(
     let conv_clone = conversation_manager.clone();
     let me_clone = verified_me.clone();
     tokio::spawn(async move {
+        log::info!("🔄 Webhook update processor started");
         while let Some(update) = rx.recv().await {
-            log::debug!("Processing update from webhook: {:?}", update.id);
+            log::info!("🔄 Processing update from webhook: ID={:?}", update.id);
             if let Err(e) = process_webhook_update(
                 bot_clone.clone(),
                 update,
@@ -398,7 +399,9 @@ async fn run_webhook_server(
                 conv_clone.clone(),
                 me_clone.clone(),
             ).await {
-                log::error!("Error processing webhook update: {:?}", e);
+                log::error!("❌ Error processing webhook update: {:?}", e);
+            } else {
+                log::info!("✓ Update processed successfully");
             }
         }
     });
@@ -441,7 +444,7 @@ async fn webhook_handler(
     State(state): State<AppState>,
     body: axum::body::Body,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
-    log::debug!("Received webhook update");
+    log::info!("📥 Received webhook update from Telegram");
     
     // Read the body
     let bytes = match axum::body::to_bytes(body, usize::MAX).await {
@@ -455,11 +458,18 @@ async fn webhook_handler(
         }
     };
     
+    log::debug!("Webhook body size: {} bytes", bytes.len());
+    
     // Parse the update
-    let update: Update = match serde_json::from_slice(&bytes) {
-        Ok(update) => update,
+    let update: Update = match serde_json::from_slice::<Update>(bytes.as_ref()) {
+        Ok(update) => {
+            log::info!("✓ Successfully parsed update ID: {:?}", update.id);
+            update
+        }
         Err(e) => {
             log::error!("Failed to parse webhook update: {}", e);
+            let preview_len = bytes.len().min(500);
+            log::error!("Raw body (first {} chars): {}", preview_len, String::from_utf8_lossy(&bytes[..preview_len]));
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(json!({"error": "Invalid update format"})),
@@ -476,6 +486,7 @@ async fn webhook_handler(
         ));
     }
     
+    log::info!("✓ Update queued for processing");
     Ok(StatusCode::OK)
 }
 
@@ -487,9 +498,12 @@ async fn process_webhook_update(
     conversation_manager: Arc<ConversationManager>,
     me: Me,
 ) -> Result<()> {
+    log::debug!("Processing update: ID={:?}, kind={:?}", update.id, update.kind);
+    
     // Handle different update types using pattern matching
-    match update {
-        Update { kind: teloxide::types::UpdateKind::Message(msg), .. } => {
+    match update.kind {
+        teloxide::types::UpdateKind::Message(msg) => {
+            log::info!("📨 Received message update");
             // Check if it's a command
             if let Some(cmd) = msg.text().and_then(|t| {
                 if t.starts_with('/') {
@@ -516,14 +530,15 @@ async fn process_webhook_update(
                 }
             }
         }
-        Update { kind: teloxide::types::UpdateKind::EditedMessage(msg), .. } => {
+        teloxide::types::UpdateKind::EditedMessage(msg) => {
+            log::info!("✏️ Received edited message update");
             // Handle edited messages
             if let Err(e) = handle_edited_message(bot, msg, me, rag_system, conversation_manager).await {
                 log::error!("Error handling edited message: {:?}", e);
             }
         }
-        _ => {
-            log::debug!("Ignoring update type: {:?}", update.id);
+        other => {
+            log::debug!("Ignoring update type: {:?} for update ID: {:?}", other, update.id);
         }
     }
     
