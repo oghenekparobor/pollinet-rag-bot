@@ -69,13 +69,15 @@ pub async fn run_bot_with_rag(config: Config, rag_system: Arc<RAGSystem>) -> Res
         .pool_idle_timeout(Duration::from_secs(90)) // Keep connections in pool
         .pool_max_idle_per_host(10); // Allow connection pooling
     
-    // For cloud platforms, prefer IPv4 and add additional settings
+    // For cloud platforms, add additional settings
     if is_cloud {
         log::info!("Applying cloud-specific network optimizations...");
-        // Note: reqwest doesn't directly support forcing IPv4, but we can configure DNS
+        // Note: Railway's network may have issues with HTTP/2 (frame size errors)
+        // We avoid forcing HTTP/2 by not calling http2_prior_knowledge()
+        // This allows reqwest to negotiate HTTP/1.1 which is more compatible
         client_builder = client_builder
-            .http2_prior_knowledge() // Use HTTP/2 if available
             .danger_accept_invalid_certs(false); // Keep security
+        // Note: We don't call http2_prior_knowledge() to avoid HTTP/2 issues on Railway
     }
     
     let client = client_builder
