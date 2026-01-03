@@ -106,6 +106,10 @@ impl Config {
     }
     
     /// Auto-detect webhook URL from cloud platform environment variables
+    /// 
+    /// Note: For webhooks, we MUST use PUBLIC domains, not private ones.
+    /// Telegram needs to reach your bot from the internet, so private domains
+    /// (like RAILWAY_PRIVATE_DOMAIN) won't work for webhooks.
     fn detect_webhook_url() -> Option<String> {
         // Check if explicitly set (highest priority)
         if let Ok(url) = env::var("WEBHOOK_URL") {
@@ -118,12 +122,16 @@ impl Config {
             }
         }
         
-        // Railway provides RAILWAY_PUBLIC_DOMAIN
+        // Railway provides RAILWAY_PUBLIC_DOMAIN (public-facing domain)
+        // This is what external services like Telegram use to reach your service
         if let Ok(domain) = env::var("RAILWAY_PUBLIC_DOMAIN") {
-            return Some(format!("https://{}", domain));
+            if !domain.is_empty() {
+                return Some(format!("https://{}", domain));
+            }
         }
         
         // Railway also provides RAILWAY_STATIC_URL for public networking
+        // This is set when you enable public networking on Railway
         if let Ok(url) = env::var("RAILWAY_STATIC_URL") {
             if !url.is_empty() {
                 // Ensure it has https://
@@ -134,6 +142,11 @@ impl Config {
                 }
             }
         }
+        
+        // Note: We do NOT use RAILWAY_PRIVATE_DOMAIN because:
+        // 1. It's only accessible within Railway's internal network
+        // 2. Telegram (external service) cannot reach private domains
+        // 3. Webhooks require public HTTPS endpoints
         
         // Fly.io provides FLY_APP_NAME
         if let Ok(app_name) = env::var("FLY_APP_NAME") {
