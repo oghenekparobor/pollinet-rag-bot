@@ -438,21 +438,39 @@ async fn run_webhook_server(
     log::info!("📍 Public webhook URL: {}", webhook_path);
     
     log::info!("🔗 Attempting to bind to {}...", addr);
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .context(format!("Failed to bind to {}. Make sure Railway's PORT env var is set and matches the port you're trying to bind to.", addr))?;
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(listener) => {
+            log::info!("✅ Server bound successfully to {}", addr);
+            listener
+        }
+        Err(e) => {
+            log::error!("❌ Failed to bind to {}: {}", addr, e);
+            log::error!("PORT env var: {:?}", std::env::var("PORT").ok());
+            anyhow::bail!(
+                "Failed to bind to {}. Error: {}\n\
+                Make sure Railway's PORT env var is set correctly.",
+                addr, e
+            );
+        }
+    };
     
-    log::info!("✅ Server bound successfully to {}", addr);
     log::info!("✅ Server is ready to receive requests!");
     log::info!("✅ Railway will forward port 80 → internal port {}", actual_port);
     log::info!("✅ Webhook URL: {}", webhook_path);
+    log::info!("✅ Health check: https://pollinet-rag-bot-production.up.railway.app/health");
+    log::info!("✅ Webhook: https://pollinet-rag-bot-production.up.railway.app/webhook");
     
     // Start the HTTP server (this blocks forever)
-    log::info!("🚀 Starting HTTP server...");
+    log::info!("🚀 Starting HTTP server (this will block forever)...");
+    
+    // Start the HTTP server (this blocks forever)
+    log::info!("🚀 HTTP server started and listening for requests...");
     axum::serve(listener, app)
         .await
-        .context("Webhook server error - server may have crashed. Check Railway logs for errors.")?;
+        .context("HTTP server error - server may have crashed. Check Railway logs for errors.")?;
     
+    // This line should never be reached in normal operation
+    log::warn!("Server shut down (this shouldn't happen in normal operation)");
     Ok(())
 }
 
