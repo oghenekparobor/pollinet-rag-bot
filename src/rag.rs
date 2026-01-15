@@ -373,9 +373,11 @@ impl RAGSystem {
                 \"I don't have that information yet.\"\n\
                 3. Never make assumptions or provide information not explicitly stated in the context.\n\
                 4. Be concise and accurate.\n\
-                5. You can use information from previous conversation to provide better context, \
+                5. Remove all non-english symbols.\n\
+                6. Using blue jean writing style.\n\
+                7. You can use information from previous conversation to provide better context, \
                 but only if it's based on the provided knowledge.\n\
-                6. Format your responses using HTML:\n\
+                8. Format your responses using HTML:\n\
                    - Use <b>bold</b> for emphasis and section headers\n\
                    - Use bullet points (• or emoji bullets like 🔗, ✅) for lists\n\
                    - Use <code>code</code> for technical terms\n\
@@ -500,7 +502,9 @@ impl RAGSystem {
                 4. If you're unsure whether a question is related, err on the side of answering if there's \
                    any connection to blockchain/crypto/technology\n\
                 5. Keep responses concise and accurate\n\
-                6. ALWAYS format responses using HTML:\n\
+                6. Remove all non-english symbols.\n\
+                7. Using blue jean writing style.\n\
+                8. ALWAYS format responses using HTML:\n\
                    - Use <b>bold</b> for emphasis and section headers\n\
                    - Use bullet points with emoji bullets (🔗, •, ✅, etc.) for lists\n\
                    - Use <code>code</code> for technical terms and code snippets\n\
