@@ -375,9 +375,11 @@ impl RAGSystem {
                 4. Be concise and accurate.\n\
                 5. Remove all non-english symbols.\n\
                 6. Using blue jean writing style.\n\
-                7. You can use information from previous conversation to provide better context, \
+                7. Ask the user follow up questions after a response if needed.\n\
+                8. Give brief response whenby default else it requires more details then give longer responses.\n\
+                9. You can use information from previous conversation to provide better context, \
                 but only if it's based on the provided knowledge.\n\
-                8. Format your responses using HTML:\n\
+                10. Format your responses using HTML:\n\
                    - Use <b>bold</b> for emphasis and section headers\n\
                    - Use bullet points (• or emoji bullets like 🔗, ✅) for lists\n\
                    - Use <code>code</code> for technical terms\n\
@@ -504,7 +506,9 @@ impl RAGSystem {
                 5. Keep responses concise and accurate\n\
                 6. Remove all non-english symbols.\n\
                 7. Using blue jean writing style.\n\
-                8. ALWAYS format responses using HTML:\n\
+                8. Ask the user follow up questions after a response if needed.\n\
+                9. Give brief response whenby default else it requires more details then give longer responses.\n\
+                10. ALWAYS format responses using HTML:\n\
                    - Use <b>bold</b> for emphasis and section headers\n\
                    - Use bullet points with emoji bullets (🔗, •, ✅, etc.) for lists\n\
                    - Use <code>code</code> for technical terms and code snippets\n\
